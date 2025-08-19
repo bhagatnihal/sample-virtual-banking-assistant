@@ -38,22 +38,19 @@ cdk.Aspects.of(app).add(AwsSolutionsChecks(verbose=True))
 
 # Create the Virtual Banking Assistant stack
 # The stack can be environment-agnostic (deploy anywhere) or environment-specific
-CdkStack(app, "VirtualBankingAssistantCdkStack",
+CdkStack(
+    app,
+    "VoiceBotCdkStack",
     # If you don't specify 'env', this stack will be environment-agnostic.
     # Account/Region-dependent features and context lookups will not work,
     # but a single synthesized template can be deployed anywhere.
-
     # For environment-specific deployment, use the current CLI configuration
     env=cdk.Environment(
-        account=os.getenv('CDK_DEFAULT_ACCOUNT'), 
-        region=os.getenv('CDK_DEFAULT_REGION')
+        account=os.getenv("CDK_DEFAULT_ACCOUNT"), region=os.getenv("CDK_DEFAULT_REGION")
     ),
-
-    description='Virtual Banking Assistant (uksb-ybsvnefrsb)'
-
+    description="Voice Bot using Pipecat and NovaSonic",
     # For explicit account/region deployment, uncomment and modify:
     # env=cdk.Environment(account='123456789012', region='us-east-1'),
-
     # For more information on environments, see:
     # https://docs.aws.amazon.com/cdk/latest/guide/environments.html
 )

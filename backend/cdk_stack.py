@@ -2,9 +2,9 @@
 # // SPDX-License-Identifier: MIT-0
 
 """
-AWS CDK Stack for Virtual Banking Assistant
+AWS CDK Stack for Voice Bot
 
-This module defines the AWS CDK stack for deploying the Virtual Banking Assistant infrastructure.
+This module defines the AWS CDK stack for deploying the Voice Bot infrastructure.
 It sets up all necessary AWS resources including:
 - ECS Fargate service for running the backend
 - Network Load Balancer for handling WebSocket connections
@@ -33,7 +33,8 @@ from aws_cdk import (
     aws_cloudfront as cloudfront,
     aws_cloudfront_origins as origins,
     aws_certificatemanager as acm,
-    RemovalPolicy
+    RemovalPolicy,
+    aws_secretsmanager as secretsmanager,
 )
 from aws_cdk.aws_apigatewayv2 import CfnIntegration, CfnRoute
 from constructs import Construct
@@ -42,9 +43,9 @@ import cdk_nag
 container_port = 8000
 
 class CdkStack(Stack):
-    """CDK Stack for Virtual Banking Assistant infrastructure.
+    """CDK Stack for Voice Bot infrastructure.
     
-    This stack creates all necessary AWS resources for running the Virtual Banking Assistant,
+    This stack creates all necessary AWS resources for running the Voice Bot,
     including compute resources, networking, authentication, and frontend hosting.
     """
 
@@ -58,30 +59,34 @@ class CdkStack(Stack):
         """
         super().__init__(scope, construct_id, **kwargs)
 
+        secret = secretsmanager.Secret.from_secret_name_v2(
+            self, "VoiceBotSecret", "voicebot/getBot/tablename"
+        )
+
         # Get VPC configuration from context
         vpc_config = self.node.try_get_context('vpc-config')
         certificate_arn = self.node.try_get_context('certificate-arn')
         
         # Get reference to existing VPC and subnets
-        vpc = ec2.Vpc.from_vpc_attributes(self, "VirtualBankingAssistantVPC",
+        vpc = ec2.Vpc.from_vpc_attributes(self, "VoiceBotVPC",
             vpc_id=vpc_config['vpcId'],
             availability_zones=vpc_config['availabilityZones'],
             public_subnet_ids=vpc_config['publicSubnetIds']
         )
 
         # Create ECS Cluster in existing VPC
-        cluster = ecs.Cluster(self, "VirtualBankingAssistantCluster",
+        cluster = ecs.Cluster(self, "VoiceBotCluster",
             vpc=vpc,
         )
 
         # Build and push Docker image to ECR
-        docker_image = ecr_assets.DockerImageAsset(self, "VirtualBankingAssistantImage",
+        docker_image = ecr_assets.DockerImageAsset(self, "VoiceBotImage",
             directory=".",
             file="Dockerfile"
         )
 
         # Create Task Role with required permissions
-        task_role = iam.Role(self, "VirtualBankingAssistantTaskRole",
+        task_role = iam.Role(self, "VoiceBotTaskRole",
             assumed_by=iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
             description="Role for Voice ECS Task"
         )
@@ -103,7 +108,7 @@ class CdkStack(Stack):
         )
 
         # Create security group for the Fargate service
-        security_group = ec2.SecurityGroup(self, "VirtualBankingAssistantServiceSG",
+        security_group = ec2.SecurityGroup(self, "VoiceBotServiceSG",
             vpc=vpc,
             allow_all_outbound=True,
             description="Security group for FastAPI service"
@@ -115,55 +120,78 @@ class CdkStack(Stack):
         )
 
         # Task Definition for Fargate
-        task_def = ecs.FargateTaskDefinition(self, "VirtualBankingAssistantTaskDef", 
+        task_def = ecs.FargateTaskDefinition(self, "VoiceBotTaskDef", 
             task_role=task_role,
             execution_role=task_role,
             cpu=2048,
             memory_limit_mib=4096,
         )
-        container = task_def.add_container("VirtualBankingAssistantContainer",
+        container = task_def.add_container(
+            "VoiceBotContainer",
             image=ecs.ContainerImage.from_docker_image_asset(docker_image),
-            logging=ecs.LogDriver.aws_logs(stream_prefix="VirtualBankingAssistant")
+            logging=ecs.LogDriver.aws_logs(stream_prefix="VoiceBot"),
+            secrets={
+                "DYNAMODB_TABLE": ecs.Secret.from_secrets_manager(
+                    secret, "DYNAMODB_TABLE"
+                ),
+                "AWS_REGION": ecs.Secret.from_secrets_manager(secret, "AWS_REGION"),
+            },
         )
         container.add_port_mappings(ecs.PortMapping(container_port=container_port, protocol=ecs.Protocol.TCP))
 
         # ECS Fargate Service in private subnets
-        service = ecs.FargateService(self, "VirtualBankingAssistantFargateService",
+        service = ecs.FargateService(
+            self,
+            "VoiceBotFargateService",
             cluster=cluster,
             task_definition=task_def,
-            assign_public_ip=False,
+            assign_public_ip=True,
             desired_count=1,
             enable_execute_command=True,
             circuit_breaker=ecs.DeploymentCircuitBreaker(rollback=True),
             security_groups=[security_group],
             vpc_subnets=ec2.SubnetSelection(
                 subnets=[
-                    ec2.Subnet.from_subnet_id(self, "TaskSubnet1", vpc_config['privateSubnetIds'][0]),
-                    ec2.Subnet.from_subnet_id(self, "TaskSubnet2", vpc_config['privateSubnetIds'][1])
+                    ec2.Subnet.from_subnet_id(
+                        self, "TaskSubnet1", vpc_config["privateSubnetIds"][0]
+                    ),
+                    ec2.Subnet.from_subnet_id(
+                        self, "TaskSubnet2", vpc_config["privateSubnetIds"][1]
+                    ),
                 ]
-            )
+            ),
         )
 
         # Network Load Balancer in public subnets
-        nlb = elbv2.NetworkLoadBalancer(self, "VirtualBankingAssistantNLB",
+        nlb = elbv2.NetworkLoadBalancer(
+            self,
+            "VoiceBotNLB",
             vpc=vpc,
             internet_facing=True,
             cross_zone_enabled=True,
             vpc_subnets=ec2.SubnetSelection(
                 subnets=[
-                    ec2.Subnet.from_subnet_id(self, "NlbSubnet1", vpc_config['publicSubnetIds'][0]),
-                    ec2.Subnet.from_subnet_id(self, "NlbSubnet2", vpc_config['publicSubnetIds'][1])
+                    ec2.Subnet.from_subnet_id(
+                        self, "NlbSubnet1", vpc_config["publicSubnetIds"][0]
+                    ),
+                    ec2.Subnet.from_subnet_id(
+                        self, "NlbSubnet2", vpc_config["publicSubnetIds"][1]
+                    ),
                 ]
-            )
+            ),
         )
 
         # TCP Target Group for WebSocket traffic
-        target_group = elbv2.NetworkTargetGroup(self, "VirtualBankingAssistantTargetGroup",
+        target_group = elbv2.NetworkTargetGroup(
+            self,
+            "VoiceBotTargetGroup",
             vpc=vpc,
             port=container_port,
             protocol=elbv2.Protocol.TCP,
             target_type=elbv2.TargetType.IP,
-            deregistration_delay=Duration.seconds(120),  # Allow 2 minutes for connections to drain
+            deregistration_delay=Duration.seconds(
+                120
+            ),  # Allow 2 minutes for connections to drain
             health_check=elbv2.HealthCheck(
                 protocol=elbv2.Protocol.HTTP,
                 path="/health",
@@ -171,23 +199,26 @@ class CdkStack(Stack):
                 unhealthy_threshold_count=3,
                 interval=Duration.seconds(30),
                 timeout=Duration.seconds(10),
-                healthy_http_codes="200-399"
-            )
+                healthy_http_codes="200-399",
+            ),
         )
 
         # Attach ECS service to Target Group
         service.attach_to_network_target_group(target_group)
 
         # Configure NLB Listener
-        listener = nlb.add_listener("VirtualBankingAssistantHttpListener",
+        listener = nlb.add_listener(
+            "VoiceBotHttpListener",
             port=443 if certificate_arn else 80,
             protocol=elbv2.Protocol.TLS if certificate_arn else elbv2.Protocol.TCP,
-            certificates=[elbv2.ListenerCertificate.from_arn(certificate_arn)] if certificate_arn else [],
-            default_target_groups=[target_group]
+            certificates=[elbv2.ListenerCertificate.from_arn(certificate_arn)]
+            if certificate_arn
+            else [],
+            default_target_groups=[target_group],
         )
 
-        # Create Cognito User Pool
-        user_pool = cognito.UserPool(self, "VirtualBankingAssistantUserpool",
+        # # Create Cognito User Pool
+        user_pool = cognito.UserPool(self, "VoiceBotUserpool",
             removal_policy=RemovalPolicy.DESTROY,
             self_sign_up_enabled=False,
             enable_sms_role=False,
@@ -211,8 +242,8 @@ class CdkStack(Stack):
             )
         )
 
-        # Add Cognito User Pool Client
-        user_pool_client = user_pool.add_client("VirtualBankingAssistantUserpoolClient",
+        # # Add Cognito User Pool Client
+        user_pool_client = user_pool.add_client("VoiceBotUserpoolClient",
             auth_flows=cognito.AuthFlow(
                 admin_user_password=False,
                 custom=False,
@@ -224,8 +255,8 @@ class CdkStack(Stack):
             supported_identity_providers=[]
         )
 
-        # Create Cognito Identity Pool
-        identity_pool = cognito.CfnIdentityPool(self, "VirtualBankingAssistantIdentityPool",
+        # # Create Cognito Identity Pool
+        identity_pool = cognito.CfnIdentityPool(self, "VoiceBotIdentityPool",
             allow_unauthenticated_identities=False,
             allow_classic_flow=False,
             cognito_identity_providers=[cognito.CfnIdentityPool.CognitoIdentityProviderProperty(
@@ -234,8 +265,8 @@ class CdkStack(Stack):
             )]
         )
 
-        # Create IAM role for authenticated users
-        authenticated_role = iam.Role(self, "VirtualBankingAssistantAuthenticatedRole",
+        # # Create IAM role for authenticated users
+        authenticated_role = iam.Role(self, "VoiceBotAuthenticatedRole",
             assumed_by=iam.FederatedPrincipal(
                 'cognito-identity.amazonaws.com',
                 {
@@ -250,16 +281,16 @@ class CdkStack(Stack):
             )
         )
 
-        # Attach roles to identity pool
-        cognito.CfnIdentityPoolRoleAttachment(self, "VirtualBankingAssistantRoleAttachment",
+        # # Attach roles to identity pool
+        cognito.CfnIdentityPoolRoleAttachment(self, "VoiceBotRoleAttachment",
             identity_pool_id=identity_pool.ref,
             roles={
                 'authenticated': authenticated_role.role_arn
             }
         )
 
-        # Create S3 bucket for frontend hosting
-        website_bucket = s3.Bucket(self, "VirtualBankingAssistantBucket",
+        # # Create S3 bucket for frontend hosting
+        website_bucket = s3.Bucket(self, "VoiceBotBucket",
             removal_policy=RemovalPolicy.DESTROY,
             auto_delete_objects=True,
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
@@ -267,8 +298,8 @@ class CdkStack(Stack):
             enforce_ssl=True
         )
 
-        # Create CloudFront distribution
-        distribution = cloudfront.Distribution(self, "VirtualBankingAssistantDistribution",
+        # # Create CloudFront distribution
+        distribution = cloudfront.Distribution(self, "VoiceBotDistribution",
             comment="Virtual Banking Assistant Frontend",
             default_behavior=cloudfront.BehaviorOptions(
                 origin=origins.S3BucketOrigin.with_origin_access_control(website_bucket),
@@ -300,48 +331,52 @@ class CdkStack(Stack):
         CfnOutput(self, "FrontendBucket", value=website_bucket.bucket_name)
 
         # cdk-nag suppressions.
-        cdk_nag.NagSuppressions.add_resource_suppressions_by_path(self, 
-            f'/{self.stack_name}/VirtualBankingAssistantCluster/Resource',
+        cdk_nag.NagSuppressions.add_resource_suppressions_by_path(
+            self,
+            f"/{self.stack_name}/VoiceBotCluster/Resource",
             [
                 {
-                    'id': 'AwsSolutions-ECS4',
-                    'reason': 'Container insights wont be used for sample code.'
+                    "id": "AwsSolutions-ECS4",
+                    "reason": "Container insights wont be used for sample code.",
                 }
-            ]
+            ],
+        )
+
+        cdk_nag.NagSuppressions.add_resource_suppressions_by_path(
+            self,
+            f"/{self.stack_name}/VoiceBotTaskRole/Resource",
+            [
+                {
+                    "id": "AwsSolutions-IAM4",
+                    "reason": "AmazonECSTaskExecutionRolePolicy is necessary.",
+                }
+            ],
+        )
+
+        cdk_nag.NagSuppressions.add_resource_suppressions_by_path(
+            self,
+            f"/{self.stack_name}/VoiceBotTaskRole/DefaultPolicy/Resource",
+            [
+                {
+                    "id": "AwsSolutions-IAM5",
+                    "reason": "Wildcards are from the managed policy.",
+                }
+            ],
+        )
+
+        cdk_nag.NagSuppressions.add_resource_suppressions_by_path(
+            self,
+            f"/{self.stack_name}/VoiceBotNLB/Resource",
+            [
+                {
+                    "id": "AwsSolutions-ELB2",
+                    "reason": "Access logging wont be used for sample code.",
+                }
+            ],
         )
 
         cdk_nag.NagSuppressions.add_resource_suppressions_by_path(self, 
-            f'/{self.stack_name}/VirtualBankingAssistantTaskRole/Resource',
-            [
-                {
-                    'id': 'AwsSolutions-IAM4',
-                    'reason': 'AmazonECSTaskExecutionRolePolicy is necessary.'
-                }
-            ]
-        )
-
-        cdk_nag.NagSuppressions.add_resource_suppressions_by_path(self, 
-            f'/{self.stack_name}/VirtualBankingAssistantTaskRole/DefaultPolicy/Resource',
-            [
-                {
-                    'id': 'AwsSolutions-IAM5',
-                    'reason': 'Wildcards are from the managed policy.'
-                }
-            ]
-        )
-
-        cdk_nag.NagSuppressions.add_resource_suppressions_by_path(self, 
-            f'/{self.stack_name}/VirtualBankingAssistantNLB/Resource',
-            [
-                {
-                    'id': 'AwsSolutions-ELB2',
-                    'reason': 'Access logging wont be used for sample code.'
-                }
-            ]
-        )
-
-        cdk_nag.NagSuppressions.add_resource_suppressions_by_path(self, 
-            f'/{self.stack_name}/VirtualBankingAssistantUserpool/Resource',
+            f'/{self.stack_name}/VoiceBotUserpool/Resource',
             [
                 {
                     'id': 'AwsSolutions-COG3',
@@ -351,7 +386,7 @@ class CdkStack(Stack):
         )
 
         cdk_nag.NagSuppressions.add_resource_suppressions_by_path(self, 
-            f'/{self.stack_name}/VirtualBankingAssistantBucket/Resource',
+            f'/{self.stack_name}/VoiceBotBucket/Resource',
             [
                 {
                     'id': 'AwsSolutions-S1',
@@ -361,7 +396,7 @@ class CdkStack(Stack):
         )
 
         cdk_nag.NagSuppressions.add_resource_suppressions_by_path(self, 
-            f'/{self.stack_name}/VirtualBankingAssistantDistribution/Resource',
+            f'/{self.stack_name}/VoiceBotDistribution/Resource',
             [
                 {
                     'id': 'AwsSolutions-CFR3',
@@ -371,7 +406,7 @@ class CdkStack(Stack):
         )
 
         cdk_nag.NagSuppressions.add_resource_suppressions_by_path(self, 
-            f'/{self.stack_name}/VirtualBankingAssistantDistribution/Resource',
+            f'/{self.stack_name}/VoiceBotDistribution/Resource',
             [
                 {
                     'id': 'AwsSolutions-CFR4',
