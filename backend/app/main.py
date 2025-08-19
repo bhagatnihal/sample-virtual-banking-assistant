@@ -218,6 +218,11 @@ async def setup(websocket: WebSocket, bot_id: str):
         for message in frame.messages:
             print(f"Transcript: [{message.timestamp}] {message.role}: {message.content}")
 
+    @transport.event_handler("on_interruption")
+    async def on_interruption(transport, frame):
+        print("Interruption detected! Cutting off assistant audio.")
+
+
     runner = PipelineRunner(handle_sigint=False, force_gc=True)
     await runner.run(task)
 
