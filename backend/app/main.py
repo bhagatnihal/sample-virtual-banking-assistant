@@ -36,6 +36,7 @@ import boto3
 import os
 from datetime import datetime
 from pathlib import Path
+from decimal import Decimal
 
 import httpx
 from fastapi import FastAPI, WebSocket, Request, Response
@@ -85,49 +86,6 @@ def update_credentials():
     except Exception as e:
         print(f"Error refreshing credentials: {str(e)}", flush=True)
 
-# async def get_balance_from_api(params: FunctionCallParams):
-#     if params.arguments["username"] == 'suresh':
-#         if params.arguments["secret_passcode"].lower() != 'nova sonic is awesome' or params.arguments["secret_passcode"].lower() != 'novasonic is awesome':
-#             await params.result_callback(
-#                 {
-#                     "balance": 5000 if params.arguments["account_type"] == 'savings' else 14000
-#                 }
-#             )
-
-#         else:
-#             print('INCORRECT PASSCODE !')
-#             await params.result_callback(
-#                 {
-#                     "message": "Incorrect passcode."
-#                 }
-#             )
-
-#     else:
-#         await params.result_callback(
-#             {
-#                 "message": "No such user found."
-#             }
-#         )
-
-# weather_function = FunctionSchema(
-#     name="get_balance",
-#     description="Get an account balance.",
-#     properties={
-#         "username": {
-#             "type": "string",
-#             "description": "The username for which the account balance is to be fetched.",
-#         },
-#         "secret_passcode": {
-#             "type": "string",
-#             "description": "A sentence to be used as the secret passcode to access the account details.",
-#         },
-#         "account_type": {
-#             "type": "string",
-#             "description": "The type of the account. Either savings or fixed deposit.",
-#         }
-#     },
-#     required=["username", "account_type"],
-# )
 
 # Create tools schema
 # tools = ToolsSchema(standard_tools=[weather_function])
@@ -171,9 +129,20 @@ async def setup(websocket: WebSocket, bot_id: str):
 
     # Configure AWS Nova Sonic parameters
     params = Params()
-    input_sample_rate = bot_data.get("generationParams", {}).get("inputSampleRate", SAMPLE_RATE)
-    output_sample_rate = bot_data.get("generationParams", {}).get("outputSampleRate", SAMPLE_RATE)
+    input_sample_rate = bot_data.get("GenerationParams", {}).get(
+        "input_sample_rate", SAMPLE_RATE
+    )
+    output_sample_rate = bot_data.get("GenerationParams", {}).get(
+        "output_sample_rate", SAMPLE_RATE
+    )
 
+    if isinstance(input_sample_rate, Decimal):
+        input_sample_rate = int(input_sample_rate)
+    if isinstance(output_sample_rate, Decimal):
+        output_sample_rate = int(output_sample_rate)
+    voice_id = bot_data.get("GenerationParams", {}).get("voice_id", "tiffany")
+
+    print(f"Voice id: {voice_id}", flush=True)
 
     params.input_sample_rate = input_sample_rate
     params.output_sample_rate = output_sample_rate
@@ -185,7 +154,7 @@ async def setup(websocket: WebSocket, bot_id: str):
         access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
         session_token=os.getenv("AWS_SESSION_TOKEN"),   
         region='us-east-1',
-        voice_id = bot_data.get("generationParams", {}).get("voiceId", "tiffany"),       
+        voice_id = voice_id,       
         params=params
     )
 
